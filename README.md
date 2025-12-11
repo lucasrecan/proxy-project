@@ -1,23 +1,96 @@
 # Mini projet Proxy FTP (en binômes)
 
-L'évaluation du travail se fera lors de la dernière séance de TP (Jeudi 15 Janvier 2026).
+# Objectif
 
-Vous devez avoir téléversé votre code sur moodle le Jeudi avant 8h.  
+- Permettre à un client FTP en mode actif (DOS) de fonctionner contre un serveur FTP distant en mode passif, via un proxy.
+- Le proxy se comporte comme un serveur FTP vis-à-vis du client, et comme un client FTP vis-à-vis du serveur.
+- L’utilisateur s’authentifie avec USER nomlogin@nomserveur . Le proxy crée la connexion de contrôle vers nomserveur , envoie USER nomlogin au vrai serveur, puis relaie toutes les commandes/réponses.
+- Pour la commande ls (FTP LIST ), le proxy intercepte les connexions de données: il accepte le côté client en mode actif (PORT) mais bascule en mode passif vers le serveur (PASV), et pont les deux flux.
+- Le proxy doit gérer plusieurs sessions simultanées.
+Actif vs Passif
 
-Lors de la dernière séance, chaque binôme fera une courte démo de son projet devant l'enseignant·e. Par la suite, l'enseignant·e posera des questions pour évaluer la compréhension des étudiant·e·s sur le code écrit.
+- Mode actif (client→serveur): le client envoie PORT h1,h2,h3,h4,p1,p2 , écoute sur ce port, et le serveur se connecte vers le client pour le transfert de données.
+- Mode passif (client→serveur): le client envoie PASV , le serveur répond 227 (...) avec une IP/port, et le client se connecte à ce port pour le transfert.
+- Ton proxy doit accepter le flux actif côté client et, côté serveur, utiliser PASV , puis faire le pont entre les deux sockets de données.
+Fichiers fournis
 
-La démonstration permet de valider les fonctionnalités réalisées ce qui donnera la note potentielle maximale à laquelle vous pouvez prétendre (par exemple, les fonctionnalités 1 à 6 s'exécutent correctement mais la fonctionnalité 7 n'est pas implémentée amenant à la note potentielle de 16/20 d'après notre grille d'évaluation),
-Les questions nous permettrons d'évaluer votre compréhension et la qualité du code. Nous enlèverons les points des éléments certes opérationnels lors de la démo mais qui ne sont pas maîtrisés/compris ou dont le code n'est pas logique/optimisé. Par exemple, les fonctionnalités 1 à 6 avaient été validées lors de la démo, mais les questions que nous posons et l'analyse du code nous montrent que les fonctionnalités 5 et 6 ne sont pas maîtrisées. Si les ces fonctionnalités étaient notées sur 6 points, alors ces 6 points seront retranchés de la note potentielle maximale. Donc notre cas, la note finale serait de 16-6 = 10/20.
+- src/ProxyFTP/proxy.c : squelette serveur TCP côté proxy à compléter. Il écoute et accepte un client, affiche l’adresse/port, puis envoie une chaîne (voir src/ProxyFTP/proxy.c:64–80 ).
+- src/ProxyFTP/simpleSocketAPI.c : utilitaire connect2Server(serverName, port, &descSock) qui gère getaddrinfo+connect (voir src/ProxyFTP/simpleSocketAPI.c:8–59 ).
+- src/client.c et src/serveur.c : exemples TCP de base pour comprendre écoute/accept/connect et lire/écrire (voir src/serveur.c:39–99 , src/client.c:41–79 ).
+- src/ProxyFTP/Makefile : compilation du proxy et de l’API socket.
+Partie 1 — Connexions de contrôle
 
-Précisions sur la notation : Les questions qui vous seront posées auront pour objectif de valider que vous maîtriser le code proposé. Ceci implique aussi maîtriser les échanges du protocole FTP. Cela peut être des questions telles que "Montrez moi l'endroit où est implémenté ceci", "Expliquez moi cette partie de code", "Que contient la variable X à ce moment ?" ou encore "Pourquoi avoir utilisé telle fonction ?". Il est important que vous maîtrisiez le code que vous nous présentez. Les questions que nous vous poserons vous paraîtront simples si vous maîtriser le code mais compliquées dans le cas contraire. 
+- Écoute côté proxy sur un port choisi dynamiquement (déjà prêt). Afficher l’IP/port et accepter des clients.
+- Dès qu’un client se connecte, envoyer 220 Proxy ready\r\n pour mimer la bannière FTP.
+- Lire la ligne USER nomlogin@nomserveur\r\n du client.
+  - Extraire nomserveur et nomlogin en séparant sur @ .
+  - Établir la connexion de contrôle vers nomserveur:21 avec connect2Server .
+  - Lire la bannière 220 du serveur réel mais ne pas la relayer (le client a déjà eu le 220 du proxy).
+  - Envoyer USER nomlogin\r\n au serveur réel, puis relayer les réponses 331 , etc., et relayer ensuite toutes les commandes/réponses suivantes de façon transparente.
+- Multiplexage contrôle:
+  - Boucle qui surveille les deux sockets (client↔proxy et proxy↔serveur) avec select() ou poll() .
+  - Toute commande venant du client est envoyée au serveur (sauf celles que tu dois intercepter, voir Partie 2).
+  - Toute réponse venant du serveur est renvoyée au client.
+- Multisession:
+  - Après listen , remplacer le accept unique par une boucle while (1) .
+  - À chaque accept , créer une session dédiée ( fork() ou thread) et gérer son contrôle/données dedans.
+  - Fermer les descripteurs correctement dans parent/enfant.
+Partie 2 — Connexions de données (LIST)
 
-Chaque année, des binômes débutent avec une note potentielle maximale de 20/20 car tout fonctionne mais obtiennent finalement une note comprise entre 0 et 5 car ils ou elles ne maîtrisent pas le code. Le problème est que ces binômes ont soit utilisé une IA ou qu'ils ont repris le code d'un autre binôme. Il vaut mieux faire moins mais que les chosent soient maîtrisées. En particulier, le barème est tel qu'il est assez simple d'obtenir 12/20 (les fonctionnalités sont simples et leur nombre est limité).
+- Intercepter la commande PORT envoyée par le client:
+  - Ne pas la relayer au serveur.
+  - Parser h1,h2,h3,h4,p1,p2 pour obtenir client_ip et client_port = p1*256 + p2 .
+  - Mémoriser cette info pour la prochaine commande de transfert ( LIST ).
+- Lorsqu’une commande de transfert arrive (au minimum LIST pour ce projet):
+  - Envoyer PASV\r\n au serveur réel et lire la réponse 227 Entering Passive Mode (a,b,c,d,e,f) .
+  - Parser l’IP/port du serveur passif: server_ip = a.b.c.d , server_port = e*256 + f .
+  - Créer deux sockets de données:
+    - Côté serveur: connect(server_ip, server_port) .
+    - Côté client: connect(client_ip, client_port) pour simuler la connexion active que le serveur aurait faite vers le client. Le client attend une connexion entrante: ton proxy prend le rôle du serveur et s’y connecte.
+  - Envoyer LIST\r\n au serveur réel sur la connexion de contrôle.
+  - Pont des données:
+    - Lire du socket de données serveur et écrire vers le socket de données client jusqu’à EOF.
+    - Optionnellement relayer aussi dans l’autre sens si nécessaire (pour RETR / STOR selon extension).
+  - Relayer les réponses de contrôle 150 et 226 au client.
+  - Fermer proprement les deux sockets de données.
+- État et robustesse:
+  - Séparer traitement contrôle et données; déclencher la séquence PASV/Data uniquement quand un transfert est demandé.
+  - Gérer timeouts/erreurs: si PASV échoue ou si la connexion client data est impossible, renvoyer un code FTP clair ( 425 , 426 , 451 ).
+Points techniques clés
 
-Conseils pour obtenir une bonne note :
+- Protocole FTP en texte avec terminaison CRLF: envoyer/recevoir les lignes avec \r\n .
+- Lecture de lignes:
+  - Implémenter une fonction de lecture de ligne qui accumule jusqu’à CRLF. Éviter read direct sans gestion de découpage.
+- Parsing USER :
+  - char *at = strchr(userArg, '@'); pour séparer login et host.
+- Parsing 227 :
+  - Extraire les nombres entre parenthèses; calculer le port avec e*256 + f .
+- PORT du client:
+  - Vérifier que l’IP mentionnée est routable depuis le proxy; pour des tests locaux, ce sera généralement 127.0.0.1 ou l’IP de la machine où tourne le client DOS via le proxy.
+- Écoute réseau:
+  - Actuellement SERVADDR vaut 127.0.0.1 dans src/ProxyFTP/proxy.c:11 . Pour exposer sur toutes interfaces, utiliser une adresse vide ( NULL ) avec AI_PASSIVE ou 0.0.0.0 . En TP, 127.0.0.1 peut suffire pour tests locaux.
+- Multisession:
+  - LISTENLEN est 1 ( src/ProxyFTP/proxy.c:13 ); augmenter si vous attendez plusieurs connexions simultanées, mais le plus important est le fork() /thread par session.
+- Nettoyage:
+  - Toujours fermer descSockCOM et les sockets de données en fin de session.
+Ce que tu dois coder dans proxy.c
 
-Vous n'avez pas besoin de tout implémenter pour obtenir une bonne note. Par contre, vous devez maîtriser chaque ligne de code produite. Par conséquent, écrivez vous même le code, ne le faites pas faire par quelqu'un ou quelque chose d'autre !
+- Bannières et handshake initial côté client ( 220 Proxy ready ).
+- Parsing USER login@server , connexion au serveur réel, envoi USER login .
+- Boucle de relais de commandes/réponses avec select() .
+- Interception PORT côté client: parse et mémorise.
+- Lors de LIST : séquence PASV côté serveur, connect data côté serveur et côté client, pont des données, fermeture.
+- Concurrence: boucle d’acception et fork() par client.
+Références dans le code
 
-Si vous avez réalisé la fonctionnalité seul·e·s (en binôme bien sûr), vous avez compris sans aide et vous maîtrisez le code,
-Si vous avez demandé de l'aide à l'enseignant·e, il ou elle vous aidera à comprendre afin que vous puissiez réaliser le travail demandé. Vous serez alors capables d'écrire le code.
-Si vous avez utilisé une IA, lisez et essayez de comprendre le code obtenu. Attention, le code généré par l'IA peut être de mauvaise qualité ou pas adapté à ce qui est demandé. Une fois cette étape effectuée, réécrire le code à la main sans regarder le code de généré par l'IA. Cela vous garantira que vous avez compris et donc que vous maîtrisez le code que vous nous présenterez.
-De part notre expérience, le nombre de séances de TP dédiées au projet est suffisant. Il n'y a pas besoin de travailler en dehors des séances de TP. Par contre, il faut être actif·ve·s pendant les séances de TP ! Même si ce qui est demandé paraît compliqué au début, vous vous rendrez compte que c'est finalement assez simple et que ce qui est demandé peut largement être réalisé en une séance voire deux séances.
+- Connexion au serveur: connect2Server déjà prête dans src/ProxyFTP/simpleSocketAPI.c:8–59 .
+- Création socket écoute côté proxy: voir src/ProxyFTP/proxy.c:34–63 .
+- Affichage IP/port d’écoute: voir src/ProxyFTP/proxy.c:64–80 .
+- Exemple d’ accept / write : src/serveur.c:85–99 . Exemple de connect / read : src/client.c:52–79 .
+
+Prochaines étapes
+
+- Implémenter la Partie 1 dans proxy.c : handshake, USER avec parsing, relais contrôle, fork() par session.
+- Ajouter l’interception PORT et la séquence PASV pour LIST , avec pont de données.
+- Ajouter lecture/écriture ligne par ligne (CRLF) et parser 227 / PORT .
+- Tester d’abord localement avec un serveur FTP local, puis avec un serveur externe.
