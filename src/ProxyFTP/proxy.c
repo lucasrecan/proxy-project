@@ -5,6 +5,7 @@
 #include  <string.h>
 #include  <unistd.h>
 #include  <stdbool.h>
+#include  <sys/select.h>
 #include "./simpleSocketAPI.h"
 
 
@@ -15,6 +16,28 @@
 #define MAXHOSTLEN 64               // Taille d'un nom de machine
 #define MAXPORTLEN 64               // Taille d'un numéro de port
 
+// Helper function to read a line from a socket (ending with \n)
+int read_line(int fd, char *buffer, int max_len) {
+    int n, rc;
+    char c;
+    for (n = 0; n < max_len - 1; n++) {
+        rc = read(fd, &c, 1);
+        if (rc == 1) {
+            buffer[n] = c;
+            if (c == '\n') {
+                n++; // Include the newline
+                break;
+            }
+        } else if (rc == 0) { // EOF
+            if (n == 0) return 0; // EOF and no data read
+            else break; // EOF but some data read
+        } else {
+            return -1; // Error
+        }
+    }
+    buffer[n] = '\0'; // Null-terminate
+    return n;
+}
 
 int main(){
     int ecode;                       // Code retour des fonctions
@@ -98,14 +121,110 @@ int main(){
     /*****
      * Testez de mettre 220 devant BLABLABLA ...
      * **/
-    strcpy(buffer, "BLABLABLA\n");
-    write(descSockCOM, buffer, strlen(buffer));
+    // strcpy(buffer, "BLABLABLA\n");
+    // write(descSockCOM, buffer, strlen(buffer));
 
     /*******
      * 
      * A vous de continuer !
      * 
      * *****/
+
+    // Send initial greeting to client
+    char *greeting = "220 Proxy ready\r\n";
+    write(descSockCOM, greeting, strlen(greeting));
+
+    // Read USER command from client
+    if (read_line(descSockCOM, buffer, MAXBUFFERLEN) <= 0) {
+        perror("Error reading USER command");
+        close(descSockCOM);
+        // Continue to next iteration (will implement loop later)
+        return 0; 
+    }
+
+    char login[MAXHOSTLEN];
+    char host[MAXHOSTLEN];
+    char *at_sign = strchr(buffer, '@');
+
+    if (strncmp(buffer, "USER ", 5) == 0 && at_sign != NULL) {
+        // Parse user and host
+        *at_sign = '\0'; // Split string at '@'
+        strcpy(login, buffer + 5); // Skip "USER "
+        // The rest of the buffer after '@' is the host, but it might have \r\n
+        strcpy(host, at_sign + 1);
+        
+        // Remove \r\n from host
+        char *crlf = strstr(host, "\r\n");
+        if (crlf) *crlf = '\0';
+        else {
+             char *lf = strchr(host, '\n');
+             if (lf) *lf = '\0';
+        }
+
+        printf("Detected USER: %s, HOST: %s\n", login, host);
+
+        // Connect to the real server
+        int descSockServer;
+        if (connect2Server(host, "21", &descSockServer) == -1) {
+             perror("Error connecting to real server");
+             close(descSockCOM);
+             return 0;
+        }
+
+        // Read (and discard) the server's 220 greeting
+        char server_buff[MAXBUFFERLEN];
+        read_line(descSockServer, server_buff, MAXBUFFERLEN);
+        printf("Server Banner (discarded): %s", server_buff);
+
+        // Send USER command to real server
+        snprintf(buffer, MAXBUFFERLEN, "USER %s\r\n", login);
+        write(descSockServer, buffer, strlen(buffer));
+
+        // Now we need the main loop to relay messages
+        fd_set rset;
+        int maxfd = (descSockCOM > descSockServer ? descSockCOM : descSockServer) + 1;
+
+        while (1) {
+            FD_ZERO(&rset);
+            FD_SET(descSockCOM, &rset);
+            FD_SET(descSockServer, &rset);
+
+            if (select(maxfd, &rset, NULL, NULL, NULL) < 0) {
+                 perror("select error");
+                 break;
+            }
+
+            // Client -> Proxy -> Server
+            if (FD_ISSET(descSockCOM, &rset)) {
+                // Using read instead of read_line to simply relay data
+                // Note: In Part 2, we will need to better handle command parsing to intercept PORT
+                int n = read(descSockCOM, buffer, MAXBUFFERLEN);
+                if (n <= 0) break; // Client disconnected
+                
+                // Write to server
+                write(descSockServer, buffer, n);
+            }
+
+            // Server -> Proxy -> Client
+            if (FD_ISSET(descSockServer, &rset)) {
+                int n = read(descSockServer, buffer, MAXBUFFERLEN);
+                if (n <= 0) break; // Server disconnected
+                
+                // Write to client
+                write(descSockCOM, buffer, n);
+            }
+        }
+        
+        close(descSockServer);
+        close(descSockCOM);
+        printf("Session closed.\n");
+        exit(0); // Exit since we are assuming one client for now (or child process later)
+
+    } else {
+        char *err = "500 Syntax error, command unrecognized or missing @host\r\n";
+        write(descSockCOM, err, strlen(err));
+        close(descSockCOM);
+    }
 
     //Fermeture de la connexion
     close(descSockCOM);
