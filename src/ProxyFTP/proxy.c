@@ -16,7 +16,6 @@
 #define MAXHOSTLEN 64               // Taille d'un nom de machine
 #define MAXPORTLEN 64               // Taille d'un numéro de port
 
-// Helper function to read a line from a socket (ending with \n)
 int read_line(int fd, char *buffer, int max_len) {
     int n, rc;
     char c;
@@ -25,17 +24,17 @@ int read_line(int fd, char *buffer, int max_len) {
         if (rc == 1) {
             buffer[n] = c;
             if (c == '\n') {
-                n++; // Include the newline
+                n++; 
                 break;
             }
-        } else if (rc == 0) { // EOF
-            if (n == 0) return 0; // EOF and no data read
-            else break; // EOF but some data read
+        } else if (rc == 0) { 
+            if (n == 0) return 0; 
+            else break; 
         } else {
-            return -1; // Error
+            return -1; 
         }
     }
-    buffer[n] = '\0'; // Null-terminate
+    buffer[n] = '\0'; 
     return n;
 }
 
