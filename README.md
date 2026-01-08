@@ -7,3 +7,5 @@ Pour se connecter, on execute ./proxy dans un terminal et ftp -z nossl -d <ip-se
 Dans notre code il manque la récupération du mot de passe par le serveur, que le proxy doit prendre en charge.
 
 Le proxy doit pouvoir suppporter plusieurs clients : pour chaque nouveau client on fait un fork().
+
+le proxy doit pas se fermer en cas d'erreur sur un client
