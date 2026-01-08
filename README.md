@@ -10,6 +10,8 @@ Le proxy doit pouvoir suppporter plusieurs clients : pour chaque nouveau client 
 
 le proxy doit pas se fermer en cas d'erreur sur un client
 
+Le proxy doit gérer les switch en mode passif/actif
+
 Ce qu'il reste à faire sur le Proxy FTP
 D'après le README et les consignes du TP, voici les étapes manquantes pour finaliser le projet :
 
