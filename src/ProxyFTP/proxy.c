@@ -40,6 +40,28 @@ int read_line(int fd, char *buffer, int max_len) {
     return n;
 }
 
+// Parse la commande PORT et extrait l'IP et le port du client
+// Format: PORT h1,h2,h3,h4,p1,p2
+// Retourne 0 si succès, -1 si erreur
+int parse_port_command(const char *cmd, char *client_ip, int *client_port) {
+    int h1, h2, h3, h4, p1, p2;
+    
+    // Chercher le début des paramètres (après "PORT ")
+    const char *params = cmd + 5; // Sauter "PORT "
+    
+    if (sscanf(params, "%d,%d,%d,%d,%d,%d", &h1, &h2, &h3, &h4, &p1, &p2) != 6) {
+        return -1;
+    }
+    
+    // Construire l'adresse IP
+    snprintf(client_ip, MAXHOSTLEN, "%d.%d.%d.%d", h1, h2, h3, h4);
+    
+    // Calculer le port (p1 * 256 + p2)
+    *client_port = p1 * 256 + p2;
+    
+    return 0;
+}
+
 int main(){
     int ecode;                       // Code retour des fonctions
     char serverAddr[MAXHOSTLEN];     // Adresse du serveur
@@ -207,6 +229,13 @@ int main(){
         fd_set rset;
         int maxfd = (descSockCOM > descSockServer ? descSockCOM : descSockServer) + 1;
 
+        // Variables pour la connexion de données
+        char client_data_ip[MAXHOSTLEN];
+        int client_data_port = 0;
+        char server_data_ip[MAXHOSTLEN];
+        int server_data_port = 0;
+        int data_transfer_pending = 0; // Flag indiquant qu'un transfert de données est en attente
+
         while (1) {
             FD_ZERO(&rset);
             FD_SET(descSockCOM, &rset);
@@ -219,20 +248,155 @@ int main(){
 
             // Client -> Proxy -> Serveur
             if (FD_ISSET(descSockCOM, &rset)) {
-                int n = read(descSockCOM, buffer, MAXBUFFERLEN);
+                int n = read(descSockCOM, buffer, MAXBUFFERLEN - 1);
                 if (n <= 0) break; // Déconnexion du client
+                buffer[n] = '\0'; // Null-terminate pour pouvoir utiliser strncmp
                 
-                // Écriture vers le serveur
-                write(descSockServer, buffer, n);
+                // Interception de la commande PORT
+                if (strncmp(buffer, "PORT ", 5) == 0) {
+                    printf("PORT intercepté: %s", buffer);
+                    
+                    // Parser la commande PORT du client
+                    if (parse_port_command(buffer, client_data_ip, &client_data_port) == 0) {
+                        printf("Client data address: %s:%d\n", client_data_ip, client_data_port);
+                        
+                        // Envoyer PASV au serveur au lieu de PORT
+                        write(descSockServer, "PASV\r\n", 6);
+                        printf("Envoi de PASV au serveur\n");
+                        data_transfer_pending = 1;
+                    } else {
+                        // Erreur de parsing, relayer la commande telle quelle
+                        write(descSockServer, buffer, n);
+                    }
+                }
+                // Détection des commandes de transfert de données (LIST, RETR, STOR, NLST)
+                else if (data_transfer_pending && 
+                         (strncmp(buffer, "LIST", 4) == 0 || 
+                          strncmp(buffer, "RETR", 4) == 0 || 
+                          strncmp(buffer, "STOR", 4) == 0 ||
+                          strncmp(buffer, "NLST", 4) == 0)) {
+                    
+                    printf("Commande de transfert détectée: %s", buffer);
+                    
+                    // 1. Se connecter au serveur en mode passif
+                    int descSockDataServer;
+                    char server_port_str[16];
+                    snprintf(server_port_str, sizeof(server_port_str), "%d", server_data_port);
+                    
+                    if (connect2Server(server_data_ip, server_port_str, &descSockDataServer) == -1) {
+                        perror("Erreur connexion data au serveur");
+                        char *err = "425 Can't open data connection.\r\n";
+                        write(descSockCOM, err, strlen(err));
+                    } else {
+                        printf("Connecté au serveur data: %s:%d\n", server_data_ip, server_data_port);
+                        
+                        // 2. Se connecter au client en mode actif
+                        int descSockDataClient;
+                        char client_port_str[16];
+                        snprintf(client_port_str, sizeof(client_port_str), "%d", client_data_port);
+                        
+                        if (connect2Server(client_data_ip, client_port_str, &descSockDataClient) == -1) {
+                            perror("Erreur connexion data au client");
+                            close(descSockDataServer);
+                            char *err = "425 Can't open data connection to client.\r\n";
+                            write(descSockCOM, err, strlen(err));
+                        } else {
+                            printf("Connecté au client data: %s:%d\n", client_data_ip, client_data_port);
+                            
+                            // Envoyer la commande au serveur
+                            write(descSockServer, buffer, n);
+                            
+                            // 3. Relayer les données entre client et serveur
+                            fd_set data_rset;
+                            int data_maxfd = (descSockDataServer > descSockDataClient ? descSockDataServer : descSockDataClient) + 1;
+                            char data_buffer[MAXBUFFERLEN];
+                            struct timeval timeout;
+                            
+                            while (1) {
+                                FD_ZERO(&data_rset);
+                                FD_SET(descSockDataServer, &data_rset);
+                                FD_SET(descSockDataClient, &data_rset);
+                                
+                                timeout.tv_sec = 5;
+                                timeout.tv_usec = 0;
+                                
+                                int sel = select(data_maxfd, &data_rset, NULL, NULL, &timeout);
+                                if (sel < 0) {
+                                    perror("select data error");
+                                    break;
+                                }
+                                if (sel == 0) {
+                                    // Timeout - pas de données, fin du transfert
+                                    printf("Data transfer timeout (normal end)\n");
+                                    break;
+                                }
+                                
+                                // Serveur -> Client (pour LIST/RETR)
+                                if (FD_ISSET(descSockDataServer, &data_rset)) {
+                                    int dn = read(descSockDataServer, data_buffer, MAXBUFFERLEN);
+                                    if (dn <= 0) {
+                                        printf("Fin données serveur\n");
+                                        break;
+                                    }
+                                    write(descSockDataClient, data_buffer, dn);
+                                }
+                                
+                                // Client -> Serveur (pour STOR)
+                                if (FD_ISSET(descSockDataClient, &data_rset)) {
+                                    int dn = read(descSockDataClient, data_buffer, MAXBUFFERLEN);
+                                    if (dn <= 0) {
+                                        printf("Fin données client\n");
+                                        break;
+                                    }
+                                    write(descSockDataServer, data_buffer, dn);
+                                }
+                            }
+                            
+                            close(descSockDataClient);
+                            printf("Socket data client fermée\n");
+                        }
+                        close(descSockDataServer);
+                        printf("Socket data serveur fermée\n");
+                    }
+                    
+                    data_transfer_pending = 0; // Reset pour le prochain transfert
+                } else {
+                    // Relayer normalement les autres commandes
+                    write(descSockServer, buffer, n);
+                }
             }
 
             // Serveur -> Proxy -> Client
             if (FD_ISSET(descSockServer, &rset)) {
-                int n = read(descSockServer, buffer, MAXBUFFERLEN);
+                int n = read(descSockServer, buffer, MAXBUFFERLEN - 1);
                 if (n <= 0) break; // Déconnexion du serveur
+                buffer[n] = '\0';
                 
-                // Écriture vers le client
-                write(descSockCOM, buffer, n);
+                // Interception de la réponse 227 (Entering Passive Mode)
+                if (data_transfer_pending && strncmp(buffer, "227 ", 4) == 0) {
+                    printf("Réponse PASV reçue: %s", buffer);
+                    
+                    // Parser la réponse 227 pour extraire l'IP et le port du serveur
+                    int h1, h2, h3, h4, p1, p2;
+                    char *start = strchr(buffer, '(');
+                    if (start && sscanf(start, "(%d,%d,%d,%d,%d,%d)", &h1, &h2, &h3, &h4, &p1, &p2) == 6) {
+                        snprintf(server_data_ip, MAXHOSTLEN, "%d.%d.%d.%d", h1, h2, h3, h4);
+                        server_data_port = p1 * 256 + p2;
+                        printf("Server data address: %s:%d\n", server_data_ip, server_data_port);
+                        
+                        // Envoyer une fausse réponse "200 PORT command successful" au client
+                        // Car le client pense qu'il est en mode actif
+                        char *fake_response = "200 PORT command successful.\r\n";
+                        write(descSockCOM, fake_response, strlen(fake_response));
+                        printf("Envoi de fausse réponse PORT au client\n");
+                    } else {
+                        // Erreur de parsing, relayer tel quel
+                        write(descSockCOM, buffer, n);
+                    }
+                } else {
+                    // Relayer normalement les autres réponses
+                    write(descSockCOM, buffer, n);
+                }
             }
         }
         
