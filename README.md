@@ -13,7 +13,6 @@ le proxy doit pas se fermer en cas d'erreur sur un client
 Le proxy doit gérer les switch en mode passif/actif
 
 Ce qu'il reste à faire sur le Proxy FTP
-D'après le README et les consignes du TP, voici les étapes manquantes pour finaliser le projet :
 
 1. Support Multi-Clients (fork)
 Le proxy actuel ne traite qu'un seul client puis s'arrête.
@@ -34,8 +33,8 @@ Pont de Données :
 Le proxy doit ouvrir une socket et se connecter au serveur (via l'IP/Port reçu dans le message 227).
 Le proxy doit ouvrir une autre socket et se connecter au client (via l'IP/Port reçu dans la commande PORT initiale).
 Le proxy doit ensuite relayer les données (le résultat du ls) entre ces deux nouvelles sockets.
+
 4. Gestion du Mot de Passe
 Le README indique que le proxy doit prendre en charge la récupération du mot de passe.
-
 Action : S'assurer qu'après la commande USER, on gère correctement la réponse 331 Password required du serveur et qu'on transmet bien la commande PASS qui suit.
 En résumé, le prochain gros morceau, c'est de sortir de la boucle de relais simple pour détecter la commande PORT et mettre en place le double pont de données.
