@@ -171,7 +171,6 @@ int main(){
     if (read_line(descSockCOM, buffer, MAXBUFFERLEN) <= 0) {
         perror("Error reading USER command");
         close(descSockCOM);
-        // Passer à l'itération suivante (on implémentera la boucle plus tard)
         return 0; 
     }
 
