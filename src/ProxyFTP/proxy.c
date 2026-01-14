@@ -318,7 +318,7 @@ int main(){
                                 FD_SET(descSockDataServer, &data_rset);
                                 FD_SET(descSockDataClient, &data_rset);
                                 
-                                timeout.tv_sec = 5;
+                                timeout.tv_sec = 1;
                                 timeout.tv_usec = 0;
                                 
                                 int sel = select(data_maxfd, &data_rset, NULL, NULL, &timeout);
