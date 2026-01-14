@@ -6,6 +6,8 @@
 #include  <unistd.h>
 #include  <stdbool.h>
 #include  <sys/select.h>
+#include  <signal.h>
+#include  <sys/wait.h>
 #include "./simpleSocketAPI.h"
 
 
@@ -107,14 +109,36 @@ int main(){
          exit(5);
      }
 
-	len = sizeof(struct sockaddr_storage);
-     // Attente connexion du client
-     // Lorsque demande de connexion, creation d'une socket de communication avec le client
-     descSockCOM = accept(descSockRDV, (struct sockaddr *) &from, &len);
-     if (descSockCOM == -1){
-         perror("Erreur accept\n");
-         exit(6);
-     }
+     // Ignorer SIGCHLD pour éviter les processus zombies
+     signal(SIGCHLD, SIG_IGN);
+
+     // Boucle principale pour accepter plusieurs clients
+     while (1) {
+         len = sizeof(struct sockaddr_storage);
+         // Attente connexion du client
+         // Lorsque demande de connexion, creation d'une socket de communication avec le client
+         descSockCOM = accept(descSockRDV, (struct sockaddr *) &from, &len);
+         if (descSockCOM == -1){
+             perror("Erreur accept\n");
+             continue; // Continuer à écouter même en cas d'erreur
+         }
+
+         // Fork pour gérer le client dans un processus fils
+         pid_t pid = fork();
+         if (pid == -1) {
+             perror("Erreur fork");
+             close(descSockCOM);
+             continue;
+         }
+
+         if (pid > 0) {
+             // Processus PARENT : ferme la socket client et continue d'écouter
+             close(descSockCOM);
+             continue;
+         }
+
+         // Processus FILS : ferme la socket RDV et gère la session client
+         close(descSockRDV);
     // Echange de données avec le client connecté
 
     /*****
@@ -215,15 +239,18 @@ int main(){
         close(descSockServer);
         close(descSockCOM);
         printf("Session closed.\n");
-        exit(0); // un seul client
+        exit(0); // Fin du processus fils
 
     } else {
         char *err = "500 Syntax error, command unrecognized or missing @host\r\n";
         write(descSockCOM, err, strlen(err));
         close(descSockCOM);
+        exit(0); // Fin du processus fils même en cas d'erreur
     }
 
-    close(descSockCOM);
+    } // Fin de la boucle while (jamais atteinte par le parent)
+
     close(descSockRDV);
+    return 0;
 }
 
