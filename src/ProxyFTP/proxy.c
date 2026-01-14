@@ -162,19 +162,6 @@ int main(){
 
          // Processus FILS : ferme la socket RDV et gère la session client
          close(descSockRDV);
-    // Echange de données avec le client connecté
-
-    /*****
-     * Testez de mettre 220 devant BLABLABLA ...
-     * **/
-    // strcpy(buffer, "BLABLABLA\n");
-    // write(descSockCOM, buffer, strlen(buffer));
-
-    /*******
-     * 
-     * A vous de continuer !
-     * 
-     * *****/
 
     // Envoi du message d'accueil initial au client
     char *greeting = "220 Proxy ready\r\n";
